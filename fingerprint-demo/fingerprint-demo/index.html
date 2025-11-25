@@ -1,158 +1,142 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Real Fingerprint Login Demo</title>
-    <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
-        input { padding: 15px; width: 300px; font-size: 18px; border-radius: 10px; border: none; margin: 10px; }
-        button { padding: 15px 30px; font-size: 18px; border-radius: 10px; border: none; cursor: pointer; margin: 10px; background: white; color: #667eea; font-weight: bold; }
-        button:hover { transform: scale(1.05); }
-        #status { margin-top: 20px; font-size: 16px; }
-        .demo-note { background: rgba(255,255,255,0.2); padding: 10px; border-radius: 10px; margin: 20px; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Biometric Fingerprint Login</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 50px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; min-height: 100vh; }
+    input { padding: 15px; width: 300px; font-size: 18px; border-radius: 12px; border: none; margin: 10px; }
+    button { padding: 15px 30px; font-size: 18px; border-radius: 12px; border: none; cursor: pointer; margin: 10px; background: white; color: #667eea; font-weight: bold; }
+    button:hover { transform: scale(1.05); }
+    .admin { background: red !important; color: white !important; }
+    h1 { font-size: 2.5em; margin-bottom: 20px; }
+    p { font-size: 1.2em; }
+  </style>
 </head>
 <body>
-    <h1>?? Real Fingerprint Login (WebAuthn Demo)</h1>
-    <p>Enter username below, then register/login. Your device will prompt for fingerprint!</p>
-    <div class="demo-note">
-        <strong>Note:</strong> This uses your device's real biometric (fingerprint/Face ID). Tested on Chrome/Edge. If no prompt, enable biometrics in your OS settings.
-    </div>
-    <input type="text" id="username" placeholder="Enter username (e.g., testuser)" />
-    <br>
-    <button onclick="handleRegister()">Register with Fingerprint</button>
-    <button onclick="handleLogin()">Login with Fingerprint</button>
-    <div id="status"></div>
+  <h1>🔐 Fingerprint Login Demo</h1>
+  <p>Real biometric authentication using WebAuthn</p>
+  <input type="text" id="username" placeholder="Enter your username (e.g., testuser)" />
+  <br>
+  <button onclick="handleRegister()">Register with Fingerprint</button>
+  <button onclick="handleLogin()">Login with Fingerprint</button>
+  <br>
+  <button class="admin" onclick="viewUsers()">ADMIN: View All Users</button>
+  <div id="status" style="margin-top: 20px; font-size: 16px;"></div>
 
-    <script>
-        // Simple in-memory storage for demo (no server)
-        const users = {};
-        let currentChallenge = null;
+  <script>
+    // UPDATE THIS TO YOUR BACKEND URL (e.g., https://your-backend.onrender.com)
+    const API_BASE = 'https://your-backend.onrender.com';  // Replace with real backend URL
 
-        // Generate random challenge (simulates server)
-        function generateChallenge() {
-            return new Uint8Array(32);
+    // Helper: Convert credential to JSON-serializable format
+    function toCred(c) {
+      const a = b => Array.from(new Uint8Array(b));
+      return {
+        id: c.id,
+        rawId: a(c.rawId),
+        type: c.type,
+        response: {
+          clientDataJSON: a(c.response.clientDataJSON),
+          attestationObject: c.response.attestationObject ? a(c.response.attestationObject) : undefined,
+          authenticatorData: c.response.authenticatorData ? a(c.response.authenticatorData) : undefined,
+          signature: c.response.signature ? a(c.response.signature) : undefined,
+          userHandle: c.response.userHandle ? a(c.response.userHandle) : null
         }
+      };
+    }
 
-        // Convert ArrayBuffer to Base64 for demo
-        function ab2str(buf) {
-            return btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+    async function handleRegister() {
+      const username = document.getElementById('username').value.trim();
+      if (!username) return updateStatus('Enter a username!', 'error');
+      if (!window.PublicKeyCredential) return updateStatus('WebAuthn not supported in this browser', 'error');
+
+      try {
+        updateStatus('Requesting registration...', 'info');
+        const res = await fetch(`${API_BASE}/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username })
+        });
+        const options = await res.json();
+
+        // Force platform biometric (fingerprint/Face ID)
+        options.publicKey.authenticatorSelection = {
+          authenticatorAttachment: 'platform',
+          userVerification: 'required',
+          requireResidentKey: true
+        };
+
+        updateStatus('Touch your fingerprint sensor...', 'info');
+        const credential = await navigator.credentials.create({ publicKey: options.publicKey });
+
+        updateStatus('Verifying...', 'info');
+        const verifyRes = await fetch(`${API_BASE}/register/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, cred: toCred(credential) })
+        });
+
+        const data = await verifyRes.json();
+        if (data.ok) {
+          updateStatus('Fingerprint registered successfully! 🎉', 'success');
+        } else {
+          updateStatus('Registration failed', 'error');
         }
+      } catch (err) {
+        updateStatus(`Error: ${err.message}. Ensure biometrics are enabled.`, 'error');
+      }
+    }
 
-        // Simulate server registration
-        async function simulateRegister(username, credential) {
-            if (!users[username]) users[username] = { credentials: [] };
-            users[username].credentials.push({
-                id: credential.id,
-                publicKey: credential.response.attestationObject, // Simplified
-                counter: 0
-            });
-            return { success: true };
+    async function handleLogin() {
+      const username = document.getElementById('username').value.trim();
+      if (!username) return updateStatus('Enter a username!', 'error');
+
+      try {
+        updateStatus('Requesting login...', 'info');
+        const res = await fetch(`${API_BASE}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username })
+        });
+        const options = await res.json();
+
+        updateStatus('Touch your fingerprint sensor...', 'info');
+        const assertion = await navigator.credentials.get({ publicKey: options.publicKey });
+
+        updateStatus('Verifying login...', 'info');
+        const verifyRes = await fetch(`${API_BASE}/login/verify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, cred: toCred(assertion) })
+        });
+
+        const data = await verifyRes.json();
+        if (data.ok) {
+          updateStatus('Logged in with your fingerprint! ✅', 'success');
+        } else {
+          updateStatus('Login failed', 'error');
         }
+      } catch (err) {
+        updateStatus(`Login error: ${err.message}`, 'error');
+      }
+    }
 
-        // Simulate server login
-        async function simulateLogin(username, assertion) {
-            const user = users[username];
-            if (!user || user.credentials.length === 0) return { success: false, error: 'Not registered' };
-            // Simple verification (in real app, verify signature)
-            return { success: true, message: 'Logged in with fingerprint!' };
-        }
+    async function viewUsers() {
+      try {
+        const res = await fetch(`${API_BASE}/debug-users`);
+        const data = await res.json();
+        alert(`All Users (${data.total} total):\n\n${JSON.stringify(data.users, null, 2)}`);
+      } catch (err) {
+        alert('Error fetching users: ' + err.message);
+      }
+    }
 
-        async function handleRegister() {
-            const username = document.getElementById('username').value.trim();
-            if (!username) return updateStatus('Enter a username!', 'error');
-
-            try {
-                updateStatus('Requesting registration challenge...', 'info');
-
-                // Generate challenge (from "server")
-                const challenge = generateChallenge();
-                currentChallenge = ab2str(challenge);
-
-                // WebAuthn registration options (forces platform biometric)
-                const publicKey = {
-                    challenge: challenge,
-                    rp: { name: 'Fingerprint Demo' },
-                    user: {
-                        id: new TextEncoder().encode(username),
-                        name: username,
-                        displayName: username
-                    },
-                    pubKeyCredParams: [{ alg: -7, type: 'public-key' }],
-                    authenticatorSelection: {
-                        authenticatorAttachment: 'platform', // Built-in fingerprint/Face ID
-                        userVerification: 'required' // Must use biometric
-                    },
-                    timeout: 60000,
-                    extensions: { credProps: true }
-                };
-
-                updateStatus('Touch your fingerprint sensor now...', 'info');
-                const credential = await navigator.credentials.create({ publicKey });
-
-                updateStatus('Verifying with server...', 'info');
-
-                // Simulate server verification
-                const result = await simulateRegister(username, credential);
-                if (result.success) {
-                    updateStatus('Fingerprint registered successfully! ??', 'success');
-                } else {
-                    updateStatus('Registration failed', 'error');
-                }
-            } catch (err) {
-                updateStatus(`Error: ${err.message} (Make sure biometrics are enabled)`, 'error');
-            }
-        }
-
-        async function handleLogin() {
-            const username = document.getElementById('username').value.trim();
-            if (!username) return updateStatus('Enter a username!', 'error');
-
-            try {
-                updateStatus('Requesting login challenge...', 'info');
-
-                // Generate challenge
-                const challenge = generateChallenge();
-                currentChallenge = ab2str(challenge);
-
-                const publicKey = {
-                    challenge: challenge,
-                    allowCredentials: users[username]?.credentials?.map(cred => ({
-                        type: 'public-key',
-                        id: new TextEncoder().encode(cred.id)
-                    })) || [],
-                    userVerification: 'required',
-                    timeout: 60000
-                };
-
-                updateStatus('Touch your fingerprint sensor now...', 'info');
-                const assertion = await navigator.credentials.get({ publicKey });
-
-                updateStatus('Verifying login...', 'info');
-
-                // Simulate server verification
-                const result = await simulateLogin(username, assertion);
-                if (result.success) {
-                    updateStatus(`${result.message} ?`, 'success');
-                } else {
-                    updateStatus(result.error, 'error');
-                }
-            } catch (err) {
-                updateStatus(`Login failed: ${err.message}`, 'error');
-            }
-        }
-
-        function updateStatus(message, type = 'info') {
-            const statusEl = document.getElementById('status');
-            statusEl.textContent = message;
-            statusEl.style.color = type === 'error' ? 'red' : type === 'success' ? 'green' : 'yellow';
-        }
-
-        // Check WebAuthn support
-        if (!window.PublicKeyCredential) {
-            updateStatus('Your browser doesn\'t support WebAuthn. Use Chrome/Edge/Firefox.', 'error');
-        }
-    </script>
+    function updateStatus(msg, type = 'info') {
+      const el = document.getElementById('status');
+      el.textContent = msg;
+      el.style.color = type === 'error' ? '#ff6b6b' : type === 'success' ? '#51cf66' : '#ffd43b';
+    }
+  </script>
 </body>
 </html>
